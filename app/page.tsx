@@ -687,7 +687,7 @@ export default function Page() {
               </svg>
               <span>
                 Não tem uma chave?{" "}
-                <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener noreferrer">
+                <a href="https://www.youtube.com/watch?v=mQq6FRv6XVI" target="_blank" rel="noopener noreferrer">
                   Clique Aqui
                 </a>
               </span>
@@ -793,3 +793,4 @@ export default function Page() {
     </>
   )
 }
+
