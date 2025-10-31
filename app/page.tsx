@@ -91,7 +91,7 @@ export default function Page() {
 
   const generateBookmarklet = (apiKeys: string[]) => {
     const keysArray = apiKeys.map((key) => `"${key}"`).join(",")
-    return `javascript:(()=>{try{const INJECT_KEYS=[${keysArray}];const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");}catch(e){console.error("inj",e);}finally{window.eval=_o;}return _o(code);};fetch("https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js").then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`
+    return `javascript:(()=>{try{const INJECT_KEYS=[${keysArray}];const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");}catch(e){console.error("inj",e);}finally{window.eval=_o;}return _o(code);};fetch("https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@latest/bypass.js").then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`
   }
 
   const handleGenerate = async () => {
@@ -793,6 +793,7 @@ export default function Page() {
     </>
   )
 }
+
 
 
 
