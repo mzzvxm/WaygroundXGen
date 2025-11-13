@@ -2,8 +2,14 @@
 
 import { useState } from "react"
 
-const API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+const GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+const DEEPSEEK_API_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 const MAX_KEYS = 3
+
+interface KeyData {
+  key: string
+  type: "gemini" | "deepseek" | "unknown"
+}
 
 export default function Page() {
   const [keyCount, setKeyCount] = useState(1)
@@ -11,19 +17,31 @@ export default function Page() {
   const [generatedScript, setGeneratedScript] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [showResult, setShowResult] = useState(false)
+  const [keyTypes, setKeyTypes] = useState<("gemini" | "deepseek" | "unknown")[]>(["unknown"])
+
+  const detectKeyType = (apiKey: string): "gemini" | "deepseek" | "unknown" => {
+    if (apiKey.startsWith("AIza")) {
+      return "gemini"
+    } else if (apiKey.startsWith("sk-or-v1")) {
+      return "deepseek"
+    }
+    return "unknown"
+  }
 
   const getAllApiKeys = () => {
-    const keys: string[] = []
+    const keysData: KeyData[] = []
     for (let i = 0; i < keyCount; i++) {
       const input = document.getElementById(`apiKey${i}`) as HTMLInputElement
       if (input && input.value.trim()) {
-        keys.push(input.value.trim())
+        const key = input.value.trim()
+        const type = detectKeyType(key)
+        keysData.push({ key, type })
       }
     }
-    return keys
+    return keysData
   }
 
-  const validateApiKey = async (apiKey: string) => {
+  const validateApiKey = async (apiKey: string, keyType: "gemini" | "deepseek" | "unknown") => {
     if (!apiKey || apiKey.trim() === "") {
       return { valid: false, error: "Chave vazia. Por favor, insira uma chave API." }
     }
@@ -32,66 +50,124 @@ export default function Page() {
       return { valid: false, error: "Chave muito curta. Verifique se copiou a chave completa." }
     }
 
-    if (!apiKey.startsWith("AIza")) {
-      return { valid: false, error: 'Formato de chave inválido. Chaves do Gemini começam com "AIza".' }
+    if (keyType === "unknown") {
+      return { valid: false, error: 'Formato de chave inválido. Chaves devem começar com "AIza" (Gemini) ou "sk-or-v1" (DeepSeek).' }
     }
 
-    try {
-      const response = await fetch(`${API_ENDPOINT}?key=${apiKey}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                {
-                  text: "test",
-                },
-              ],
-            },
-          ],
-        }),
-      })
+    // Validação Gemini
+    if (keyType === "gemini") {
+      try {
+        const response = await fetch(`${GEMINI_API_ENDPOINT}?key=${apiKey}`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  {
+                    text: "test",
+                  },
+                ],
+              },
+            ],
+          }),
+        })
 
-      if (response.ok) {
-        return { valid: true }
-      }
-
-      const errorData = await response.json()
-
-      if (response.status === 400) {
-        if (errorData.error?.message?.includes("API_KEY_INVALID")) {
-          return { valid: false, error: "Chave API inválida. Verifique se a chave está correta." }
+        if (response.ok) {
+          return { valid: true, type: "gemini" }
         }
-        return { valid: false, error: "Chave API com formato incorreto." }
-      }
 
-      if (response.status === 403) {
-        return { valid: false, error: "Chave API sem permissão. Verifique se a API do Gemini está ativada." }
-      }
+        const errorData = await response.json()
 
-      if (response.status === 404) {
-        return { valid: false, error: "Chave API não encontrada ou inválida." }
-      }
+        if (response.status === 400) {
+          if (errorData.error?.message?.includes("API_KEY_INVALID")) {
+            return { valid: false, error: "Chave Gemini inválida. Verifique se a chave está correta." }
+          }
+          return { valid: false, error: "Chave Gemini com formato incorreto." }
+        }
 
-      if (response.status === 429) {
-        return { valid: false, error: "Limite de requisições excedido. Tente novamente em alguns minutos." }
-      }
+        if (response.status === 403) {
+          return { valid: false, error: "Chave Gemini sem permissão. Verifique se a API do Gemini está ativada." }
+        }
 
-      return { valid: false, error: `Erro ao validar chave: ${errorData.error?.message || "Erro desconhecido"}` }
-    } catch (error: any) {
-      if (error.name === "TypeError" && error.message.includes("fetch")) {
-        return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
+        if (response.status === 404) {
+          return { valid: false, error: "Chave Gemini não encontrada ou inválida." }
+        }
+
+        if (response.status === 429) {
+          return { valid: false, error: "Limite de requisições Gemini excedido. Tente novamente em alguns minutos." }
+        }
+
+        return { valid: false, error: `Erro ao validar chave Gemini: ${errorData.error?.message || "Erro desconhecido"}` }
+      } catch (error: any) {
+        if (error.name === "TypeError" && error.message.includes("fetch")) {
+          return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
+        }
+        return { valid: false, error: `Erro ao validar chave Gemini: ${error.message}` }
       }
-      return { valid: false, error: `Erro ao validar: ${error.message}` }
     }
+
+    // Validação DeepSeek
+    if (keyType === "deepseek") {
+      try {
+        const response = await fetch(DEEPSEEK_API_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`,
+          },
+          body: JSON.stringify({
+            model: "deepseek/deepseek-chat",
+            messages: [
+              {
+                role: "user",
+                content: "test",
+              },
+            ],
+          }),
+        })
+
+        if (response.ok) {
+          return { valid: true, type: "deepseek" }
+        }
+
+        const errorData = await response.json()
+
+        if (response.status === 400) {
+          return { valid: false, error: "Chave DeepSeek com formato incorreto." }
+        }
+
+        if (response.status === 401) {
+          return { valid: false, error: "Chave DeepSeek inválida ou expirada. Verifique sua chave no OpenRouter." }
+        }
+
+        if (response.status === 403) {
+          return { valid: false, error: "Chave DeepSeek sem permissão. Verifique as configurações no OpenRouter." }
+        }
+
+        if (response.status === 429) {
+          return { valid: false, error: "Limite de requisições DeepSeek excedido. Tente novamente em alguns minutos." }
+        }
+
+        return { valid: false, error: `Erro ao validar chave DeepSeek: ${errorData.error?.message || "Erro desconhecido"}` }
+      } catch (error: any) {
+        if (error.name === "TypeError" && error.message.includes("fetch")) {
+          return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
+        }
+        return { valid: false, error: `Erro ao validar chave DeepSeek: ${error.message}` }
+      }
+    }
+
+    return { valid: false, error: "Tipo de chave desconhecido." }
   }
 
-  const generateBookmarklet = (apiKeys: string[]) => {
-    const keysArray = apiKeys.map((key) => `"${key}"`).join(",")
-    return `javascript:(()=>{try{const INJECT_KEYS=[${keysArray}];const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");}catch(e){console.error("inj",e);}finally{window.eval=_o;}return _o(code);};fetch("https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js").then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`
+  const generateBookmarklet = (keysData: KeyData[]) => {
+    const geminiKeys = keysData.filter(k => k.type === "gemini").map(k => `"${k.key}"`).join(",")
+    const deepseekKey = keysData.find(k => k.type === "deepseek")?.key || ""
+    
+    return `javascript:(()=>{try{const INJECT_KEYS=[${geminiKeys}];const INJECT_DEEPSEEK="${deepseekKey}";const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");code=code.replace(/const\\s+OPENROUTER_API_KEY\\s*=\\s*"[^"]*"/m,"const OPENROUTER_API_KEY = \\""+INJECT_DEEPSEEK+"\\"");}catch(e){console.error("inj",e);}finally{window.eval=_o;}return _o(code);};fetch("https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js").then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`
   }
 
   const handleGenerate = async () => {
@@ -110,7 +186,7 @@ export default function Page() {
       setStatusMessage({ text: `Validando ${apiKeys.length} chave(s) API...`, type: "success" })
 
       const validations = await Promise.all(
-        apiKeys.map((key, index) => validateApiKey(key).then((result) => ({ ...result, index: index + 1 }))),
+        apiKeys.map((key, index) => validateApiKey(key.key, key.type).then((result) => ({ ...result, index: index + 1 }))),
       )
 
       const invalidKeys = validations.filter((v) => !v.valid)
@@ -420,6 +496,16 @@ export default function Page() {
           color: rgba(255, 255, 255, 0.3);
         }
 
+        .input-group label {
+          font-size: 0.9rem;
+          font-weight: 500;
+          color: rgba(255, 255, 255, 0.8);
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          transition: color 0.3s ease;
+        }
+
         .add-key-btn {
           width: 100%;
           padding: 12px 20px;
@@ -687,34 +773,52 @@ export default function Page() {
               </svg>
               <span>
                 Não tem uma chave?{" "}
-                <a href="https://www.youtube.com/watch?v=CZOGoCXctnM" target="_blank" rel="noopener noreferrer">
+                <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener noreferrer">
                   Clique Aqui
                 </a>
               </span>
             </div>
 
             <div id="keysContainer">
-              {Array.from({ length: keyCount }).map((_, index) => (
-                <div key={index} className="input-group" data-key-index={index}>
-                  <label htmlFor={`apiKey${index}`}>Chave API do Gemini {index > 0 ? index + 1 : ""}</label>
-                  {index > 0 && (
-                    <button className="remove-key-btn" onClick={() => removeKeyInput(index)} aria-label="Remover chave">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                      </svg>
-                    </button>
-                  )}
-                  <input
-                    type="text"
-                    id={`apiKey${index}`}
-                    className="api-key-input"
-                    placeholder="Cole sua chave API aqui..."
-                    autoComplete="off"
-                    onKeyPress={(e) => e.key === "Enter" && handleGenerate()}
-                  />
-                </div>
-              ))}
+              {Array.from({ length: keyCount }).map((_, index) => {
+                const input = typeof document !== 'undefined' ? (document.getElementById(`apiKey${index}`) as HTMLInputElement) : null
+                const keyValue = input?.value.trim() || ""
+                const detectedType = keyValue ? detectKeyType(keyValue) : "unknown"
+                const typeLabel = detectedType === "gemini" ? "⭐ Gemini" : detectedType === "deepseek" ? "🐋 DeepSeek" : "🔑 DeepSeek ou Gemini"
+                const typeColor = detectedType === "gemini" ? "#a78bfa" : detectedType === "deepseek" ? "#ec4899" : "#666"
+
+                return (
+                  <div key={index} className="input-group" data-key-index={index}>
+                    <label htmlFor={`apiKey${index}`}>
+                      Chave API - {typeLabel}
+                    </label>
+                    {index > 0 && (
+                      <button className="remove-key-btn" onClick={() => removeKeyInput(index)} aria-label="Remover chave">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <line x1="18" y1="6" x2="6" y2="18"></line>
+                          <line x1="6" y1="6" x2="18" y2="18"></line>
+                        </svg>
+                      </button>
+                    )}
+                    <input
+                      type="text"
+                      id={`apiKey${index}`}
+                      className="api-key-input"
+                      placeholder="Cole sua chave Gemini (AIza...) ou DeepSeek (sk-or-v1...)..."
+                      autoComplete="off"
+                      onKeyPress={(e) => e.key === "Enter" && handleGenerate()}
+                      onChange={() => {
+                        const newTypes = [...keyTypes]
+                        const input = document.getElementById(`apiKey${index}`) as HTMLInputElement
+                        if (input) {
+                          newTypes[index] = detectKeyType(input.value.trim())
+                          setKeyTypes(newTypes)
+                        }
+                      }}
+                    />
+                  </div>
+                )
+              })}
             </div>
 
             <button className="add-key-btn" onClick={addKeyInput} disabled={keyCount >= MAX_KEYS}>
@@ -793,8 +897,3 @@ export default function Page() {
     </>
   )
 }
-
-
-
-
-
