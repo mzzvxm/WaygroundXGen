@@ -167,7 +167,7 @@ export default function Page() {
     const geminiKeys = keysData.filter(k => k.type === "gemini").map(k => `"${k.key}"`).join(",")
     const deepseekKey = keysData.find(k => k.type === "deepseek")?.key || ""
     
-    return `javascript:(()=>{try{const INJECT_KEYS=[${geminiKeys}];const INJECT_DEEPSEEK="${deepseekKey}";const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\s+GEMINI_API_KEYS\s*=\s*\[[\s\S]*?\]\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");code=code.replace(/const\s+OPENROUTER_API_KEYS\s*=\s*\[[\s\S]*?\]\s*;/m,"const OPENROUTER_API_KEYS = [\\\""+INJECT_DEEPSEEK+"\\\"];");}catch(e){console.error('inj',e);}finally{window.eval=_o;}return _o(code);};const url="https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js?_="+Date.now();fetch(url,{cache:"no-store",credentials:"omit"}).then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`
+    return `javascript:(()=>{try{const INJECT_KEYS=[${geminiKeys}];const INJECT_DEEPSEEK="${deepseekKey}";const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");code=code.replace(/const\\s+OPENROUTER_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const OPENROUTER_API_KEYS = [\\\""+INJECT_DEEPSEEK+"\\\"];");}catch(e){console.error('inj',e);}finally{window.eval=_o;}return _o(code);};const url="https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js?_="+Date.now();fetch(url,{cache:"no-store",credentials:"omit"}).then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`;
   }
 
   const handleGenerate = async () => {
@@ -897,5 +897,6 @@ export default function Page() {
     </>
   )
 }
+
 
 
