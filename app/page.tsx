@@ -19,6 +19,11 @@ export default function Page() {
   const [showResult, setShowResult] = useState(false)
   const [keyTypes, setKeyTypes] = useState<("gemini" | "deepseek" | "unknown")[]>(["unknown"])
 
+  // Estados para o Modal de Erro
+  const [showErrorModal, setShowErrorModal] = useState(false)
+  const [modalErrorText, setModalErrorText] = useState("")
+  const [pendingApiKeys, setPendingApiKeys] = useState<KeyData[]>([])
+
   const detectKeyType = (apiKey: string): "gemini" | "deepseek" | "unknown" => {
     if (apiKey.startsWith("AIza")) {
       return "gemini"
@@ -79,13 +84,8 @@ export default function Page() {
           return { valid: true, type: "gemini" }
         }
 
-        const errorData = await response.json()
-
-        if (response.status === 400) {
-          if (errorData.error?.message?.includes("API_KEY_INVALID")) {
-            return { valid: false, error: "Chave Gemini inválida. Verifique se a chave está correta." }
-          }
-          return { valid: false, error: "Chave Gemini com formato incorreto." }
+        if (response.status === 429) {
+          return { valid: false, error: "Limite de requisições Gemini excedido (Erro 429). Tente novamente em alguns minutos." }
         }
 
         if (response.status === 403) {
@@ -96,11 +96,22 @@ export default function Page() {
           return { valid: false, error: "Chave Gemini não encontrada ou inválida." }
         }
 
-        if (response.status === 429) {
-          return { valid: false, error: "Limite de requisições Gemini excedido. Tente novamente em alguns minutos." }
+        let errorMsg = "Erro desconhecido";
+        try {
+          const errorData = await response.json();
+          if (response.status === 400) {
+            if (errorData.error?.message?.includes("API_KEY_INVALID")) {
+              return { valid: false, error: "Chave Gemini inválida. Verifique se a chave está correta." }
+            }
+            return { valid: false, error: "Chave Gemini com formato incorreto." }
+          }
+          errorMsg = errorData.error?.message || errorMsg;
+        } catch (jsonError) {
+          console.error("Erro ao ler JSON da resposta Gemini:", jsonError);
         }
 
-        return { valid: false, error: `Erro ao validar chave Gemini: ${errorData.error?.message || "Erro desconhecido"}` }
+        return { valid: false, error: `Erro ao validar chave Gemini: ${errorMsg}` }
+
       } catch (error: any) {
         if (error.name === "TypeError" && error.message.includes("fetch")) {
           return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
@@ -133,10 +144,8 @@ export default function Page() {
           return { valid: true, type: "deepseek" }
         }
 
-        const errorData = await response.json()
-
-        if (response.status === 400) {
-          return { valid: false, error: "Chave DeepSeek com formato incorreto." }
+        if (response.status === 429) {
+          return { valid: false, error: "Limite de requisições DeepSeek excedido (Erro 429). Tente novamente em alguns minutos." }
         }
 
         if (response.status === 401) {
@@ -147,11 +156,19 @@ export default function Page() {
           return { valid: false, error: "Chave DeepSeek sem permissão. Verifique as configurações no OpenRouter." }
         }
 
-        if (response.status === 429) {
-          return { valid: false, error: "Limite de requisições DeepSeek excedido. Tente novamente em alguns minutos." }
+        let errorMsg = "Erro desconhecido";
+        try {
+          const errorData = await response.json();
+          if (response.status === 400) {
+             return { valid: false, error: "Chave DeepSeek com formato incorreto." }
+          }
+          errorMsg = errorData.error?.message || errorMsg;
+        } catch (jsonError) {
+           console.error("Erro ao ler JSON da resposta DeepSeek:", jsonError);
         }
 
-        return { valid: false, error: `Erro ao validar chave DeepSeek: ${errorData.error?.message || "Erro desconhecido"}` }
+        return { valid: false, error: `Erro ao validar chave DeepSeek: ${errorMsg}` }
+
       } catch (error: any) {
         if (error.name === "TypeError" && error.message.includes("fetch")) {
           return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
@@ -168,6 +185,15 @@ export default function Page() {
     const deepseekKey = keysData.find(k => k.type === "deepseek")?.key || ""
     
     return `javascript:(()=>{try{const INJECT_KEYS=[${geminiKeys}];const INJECT_DEEPSEEK="${deepseekKey}";const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");code=code.replace(/const\\s+OPENROUTER_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const OPENROUTER_API_KEYS = [\\\""+INJECT_DEEPSEEK+"\\\"];");}catch(e){console.error('inj',e);}finally{window.eval=_o;}return _o(code);};const url="https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js?_="+Date.now();fetch(url,{cache:"no-store",credentials:"omit"}).then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`;
+  }
+
+  // Função chamada para gerar o script (seja direto ou após confirmar no modal)
+  const finalizeGeneration = async (keys: KeyData[]) => {
+    const bookmarklet = generateBookmarklet(keys)
+    setGeneratedScript(bookmarklet)
+    setShowResult(true)
+    setStatusMessage({ text: `✓ Script gerado com sucesso com ${keys.length} chave(s)!`, type: "success" })
+    setIsLoading(false)
   }
 
   const handleGenerate = async () => {
@@ -192,85 +218,74 @@ export default function Page() {
       const invalidKeys = validations.filter((v) => !v.valid)
 
       if (invalidKeys.length > 0) {
+        // Se houver erros, prepara e mostra o modal
         const errorMessages = invalidKeys.map((v) => `Chave ${v.index}: ${v.error}`).join("\n")
-        setStatusMessage({ text: errorMessages, type: "error" })
+        
+        setModalErrorText(errorMessages)
+        setPendingApiKeys(apiKeys) // Salva as chaves para uso posterior se o usuário aceitar
+        setShowErrorModal(true)
+        setIsLoading(false) // Para o loading pois vai esperar input do usuário
         return
       }
 
       setStatusMessage({ text: "✓ Todas as chaves são válidas! Gerando seu script...", type: "success" })
-
       await new Promise((resolve) => setTimeout(resolve, 500))
+      finalizeGeneration(apiKeys)
 
-      const bookmarklet = generateBookmarklet(apiKeys)
-      setGeneratedScript(bookmarklet)
-      setShowResult(true)
-
-      setStatusMessage({ text: `✓ Script gerado com sucesso com ${apiKeys.length} chave(s)!`, type: "success" })
     } catch (error: any) {
       setStatusMessage({ text: `Erro inesperado: ${error.message}`, type: "error" })
-    } finally {
       setIsLoading(false)
     }
   }
 
   const handleCopy = async () => {
-  // Primeiro, verificamos se o navegador suporta a API de Permissões
-  if (navigator.permissions && navigator.permissions.query) {
-    try {
-      // Consultamos o status da permissão para escrita na área de transferência
-      const permissionStatus = await navigator.permissions.query({ name: "clipboard-write" as PermissionName });
+    if (navigator.permissions && navigator.permissions.query) {
+      try {
+        const permissionStatus = await navigator.permissions.query({ name: "clipboard-write" as PermissionName });
 
-      // Se a permissão estiver 'granted' (concedida) ou 'prompt' (ainda não perguntada),
-      // nós tentamos copiar. O navegador cuidará de mostrar o pop-up se for 'prompt'.
-      if (permissionStatus.state === 'granted' || permissionStatus.state === 'prompt') {
-        try {
-          await navigator.clipboard.writeText(generatedScript);
-          
-          // Lógica de sucesso (botão muda para "Copiado!")
-          const btn = document.getElementById("copyBtn");
-          if (btn) {
-            const originalHTML = btn.innerHTML;
-            btn.innerHTML = `
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <polyline points="20 6 9 17 4 12"></polyline>
-              </svg>
-              Copiado!
-            `;
-            setTimeout(() => {
-              btn.innerHTML = originalHTML;
-            }, 2000);
+        if (permissionStatus.state === 'granted' || permissionStatus.state === 'prompt') {
+          try {
+            await navigator.clipboard.writeText(generatedScript);
+            
+            const btn = document.getElementById("copyBtn");
+            if (btn) {
+              const originalHTML = btn.innerHTML;
+              btn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <polyline points="20 6 9 17 4 12"></polyline>
+                </svg>
+                Copiado!
+              `;
+              setTimeout(() => {
+                btn.innerHTML = originalHTML;
+              }, 2000);
+            }
+          } catch (err) {
+            setStatusMessage({ text: "A permissão para copiar foi negada pelo usuário.", type: "error" });
           }
-        } catch (err) {
-          // Este erro acontece se o usuário negar a permissão no pop-up
-          setStatusMessage({ text: "A permissão para copiar foi negada pelo usuário.", type: "error" });
+        } else if (permissionStatus.state === 'denied') {
+          setStatusMessage({
+            text: "Acesso à área de transferência bloqueado. Por favor, habilite a permissão nas configurações do seu navegador para este site.",
+            type: "error",
+          });
         }
-      } else if (permissionStatus.state === 'denied') {
-        // Se a permissão foi negada anteriormente, informamos como corrigir
-        setStatusMessage({
-          text: "Acesso à área de transferência bloqueado. Por favor, habilite a permissão nas configurações do seu navegador para este site.",
-          type: "error",
-        });
+      } catch (error) {
+        setStatusMessage({ text: "Não foi possível verificar a permissão para copiar.", type: "error" });
       }
-    } catch (error) {
-      // Caso a verificação de permissão falhe por outro motivo
-      setStatusMessage({ text: "Não foi possível verificar a permissão para copiar.", type: "error" });
-    }
-  } else {
-    // Fallback para navegadores mais antigos que não suportam a API de Permissões
-    try {
-      await navigator.clipboard.writeText(generatedScript);
-      // Lógica de sucesso (igual a de cima)
-      const btn = document.getElementById("copyBtn");
-      if (btn) {
-        const originalHTML = btn.innerHTML;
-        btn.innerHTML = `... Copiado! ...`; // Adapte o HTML se quiser
-        setTimeout(() => { btn.innerHTML = originalHTML; }, 2000);
+    } else {
+      try {
+        await navigator.clipboard.writeText(generatedScript);
+        const btn = document.getElementById("copyBtn");
+        if (btn) {
+          const originalHTML = btn.innerHTML;
+          btn.innerHTML = `... Copiado! ...`;
+          setTimeout(() => { btn.innerHTML = originalHTML; }, 2000);
+        }
+      } catch (error) {
+        setStatusMessage({ text: "Erro ao copiar. Tente selecionar e copiar manualmente.", type: "error" });
       }
-    } catch (error) {
-      setStatusMessage({ text: "Erro ao copiar. Tente selecionar e copiar manualmente.", type: "error" });
     }
-  }
-};
+  };
 
   const handleDownload = () => {
     const blob = new Blob([generatedScript], { type: "text/plain" })
@@ -298,6 +313,24 @@ export default function Page() {
       }
       setKeyCount(keyCount - 1)
     }
+  }
+
+  // Funções do Modal
+  const confirmGeneration = () => {
+    setShowErrorModal(false)
+    setIsLoading(true)
+    setStatusMessage({ text: "Gerando script apesar dos erros...", type: "success" })
+    
+    // Pequeno delay para UX
+    setTimeout(() => {
+      finalizeGeneration(pendingApiKeys)
+    }, 500)
+  }
+
+  const cancelGeneration = () => {
+    setShowErrorModal(false)
+    setStatusMessage({ text: "Geração cancelada devido aos erros de validação.", type: "error" })
+    setIsLoading(false)
   }
 
   return (
@@ -699,6 +732,107 @@ export default function Page() {
           background: rgba(60, 60, 60, 0.6);
         }
 
+        /* MODAL STYLES */
+        .modal-overlay {
+          position: fixed;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          background: rgba(0, 0, 0, 0.8);
+          backdrop-filter: blur(5px);
+          z-index: 9999;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          animation: fadeIn 0.3s ease-out;
+        }
+
+        .modal-content {
+          background: rgba(25, 25, 25, 0.95);
+          border: 1px solid rgba(239, 68, 68, 0.5); /* Borda vermelha para alerta */
+          border-radius: 20px;
+          padding: 30px;
+          width: 90%;
+          max-width: 500px;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+          text-align: center;
+          animation: fadeInUp 0.3s ease-out;
+        }
+
+        .modal-icon {
+          width: 60px;
+          height: 60px;
+          background: rgba(239, 68, 68, 0.2);
+          border-radius: 50%;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          margin: 0 auto 20px;
+          color: #ef4444;
+        }
+
+        .modal-title {
+          font-size: 1.5rem;
+          font-weight: 700;
+          margin-bottom: 10px;
+          color: #ffffff;
+        }
+
+        .modal-text {
+          color: rgba(255, 255, 255, 0.8);
+          margin-bottom: 20px;
+          font-size: 0.95rem;
+          line-height: 1.5;
+          white-space: pre-line;
+          background: rgba(239, 68, 68, 0.1);
+          padding: 10px;
+          border-radius: 8px;
+          border: 1px dashed rgba(239, 68, 68, 0.3);
+        }
+
+        .modal-question {
+          font-weight: 600;
+          color: #ffffff;
+          margin-bottom: 20px;
+        }
+
+        .modal-buttons {
+          display: flex;
+          gap: 12px;
+          justify-content: center;
+        }
+
+        .modal-btn {
+          padding: 12px 20px;
+          border-radius: 10px;
+          font-size: 0.9rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s ease;
+          border: none;
+        }
+
+        .modal-btn.confirm {
+          background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+          color: white;
+        }
+
+        .modal-btn.confirm:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 5px 15px rgba(168, 85, 247, 0.4);
+        }
+
+        .modal-btn.cancel {
+          background: rgba(255, 255, 255, 0.1);
+          color: #ffffff;
+          border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .modal-btn.cancel:hover {
+          background: rgba(255, 255, 255, 0.15);
+        }
+
         .footer {
           margin-top: 30px;
           text-align: center;
@@ -746,7 +880,7 @@ export default function Page() {
             font-size: 2rem;
           }
 
-          .button-group {
+          .button-group, .modal-buttons {
             flex-direction: column;
           }
 
@@ -756,6 +890,34 @@ export default function Page() {
           }
         }
       `}</style>
+
+      {/* MODAL COMPONENT */}
+      {showErrorModal && (
+        <div className="modal-overlay">
+          <div className="modal-content">
+            <div className="modal-icon">
+              <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+                <line x1="12" y1="9" x2="12" y2="13"></line>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+            </div>
+            <h3 className="modal-title">Erro na Validação</h3>
+            <div className="modal-text">
+              {modalErrorText}
+            </div>
+            <p className="modal-question">Deseja gerar o script mesmo com erro?</p>
+            <div className="modal-buttons">
+              <button className="modal-btn confirm" onClick={confirmGeneration}>
+                Sim, gerar mesmo assim
+              </button>
+              <button className="modal-btn cancel" onClick={cancelGeneration}>
+                Não, cancelar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="container">
         <div className="card">
@@ -897,6 +1059,3 @@ export default function Page() {
     </>
   )
 }
-
-
-
