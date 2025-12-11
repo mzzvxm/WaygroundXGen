@@ -2,7 +2,7 @@
 
 import { useState } from "react"
 
-const GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+const GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 const DEEPSEEK_API_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 const MAX_KEYS = 3
 
