@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 
-const GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent"
+// Alterado para o endpoint genérico de listagem de modelos para validação universal
+const GEMINI_VALIDATION_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 const DEEPSEEK_API_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 const MAX_KEYS = 3
 
@@ -11,18 +12,41 @@ interface KeyData {
   type: "gemini" | "deepseek" | "unknown"
 }
 
+interface ApiKeyInput {
+  value: string
+  type: "gemini" | "deepseek" | "unknown"
+}
+
 export default function Page() {
-  const [keyCount, setKeyCount] = useState(1)
+  const [apiKeys, setApiKeys] = useState<ApiKeyInput[]>([{ value: "", type: "unknown" }])
   const [statusMessage, setStatusMessage] = useState({ text: "", type: "" })
   const [generatedScript, setGeneratedScript] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [showResult, setShowResult] = useState(false)
-  const [keyTypes, setKeyTypes] = useState<("gemini" | "deepseek" | "unknown")[]>(["unknown"])
+  const [isCopied, setIsCopied] = useState(false)
+  const [isLoaded, setIsLoaded] = useState(false)
 
   // Estados para o Modal de Erro
   const [showErrorModal, setShowErrorModal] = useState(false)
   const [modalErrorText, setModalErrorText] = useState("")
   const [pendingApiKeys, setPendingApiKeys] = useState<KeyData[]>([])
+
+  // Carrega as chaves do localStorage ao iniciar a página
+  useEffect(() => {
+    try {
+      const savedKeys = localStorage.getItem('wayground_api_keys')
+      if (savedKeys) {
+        const parsedKeys = JSON.parse(savedKeys)
+        if (Array.isArray(parsedKeys) && parsedKeys.length > 0) {
+          setApiKeys(parsedKeys)
+        }
+      }
+    } catch (error) {
+      console.error("Erro ao carregar chaves salvas:", error)
+    } finally {
+      setIsLoaded(true)
+    }
+  }, [])
 
   const detectKeyType = (apiKey: string): "gemini" | "deepseek" | "unknown" => {
     if (apiKey.startsWith("AIza")) {
@@ -33,17 +57,13 @@ export default function Page() {
     return "unknown"
   }
 
-  const getAllApiKeys = () => {
-    const keysData: KeyData[] = []
-    for (let i = 0; i < keyCount; i++) {
-      const input = document.getElementById(`apiKey${i}`) as HTMLInputElement
-      if (input && input.value.trim()) {
-        const key = input.value.trim()
-        const type = detectKeyType(key)
-        keysData.push({ key, type })
-      }
-    }
-    return keysData
+  const getValidApiKeysData = (): KeyData[] => {
+    return apiKeys
+      .filter((k) => k.value.trim() !== "")
+      .map((k) => ({
+        key: k.value.trim(),
+        type: k.type,
+      }))
   }
 
   const validateApiKey = async (apiKey: string, keyType: "gemini" | "deepseek" | "unknown") => {
@@ -59,25 +79,15 @@ export default function Page() {
       return { valid: false, error: 'Formato de chave inválido. Chaves devem começar com "AIza" (Gemini) ou "sk-or-v1" (DeepSeek).' }
     }
 
-    // Validação Gemini
+    // Validação Gemini (Atualizada para suportar chaves novas com hífens/underscores)
     if (keyType === "gemini") {
       try {
-        const response = await fetch(`${GEMINI_API_ENDPOINT}?key=${apiKey}`, {
-          method: "POST",
+        // Usar GET /models evita 404 de modelos específicos e passa direto por chaves novas
+        const response = await fetch(`${GEMINI_VALIDATION_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+          method: "GET",
           headers: {
             "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: "test",
-                  },
-                ],
-              },
-            ],
-          }),
+          }
         })
 
         if (response.ok) {
@@ -89,7 +99,7 @@ export default function Page() {
         }
 
         if (response.status === 403) {
-          return { valid: false, error: "Chave Gemini sem permissão. Verifique se a API do Gemini está ativada." }
+          return { valid: false, error: "Chave Gemini sem permissão. Verifique se a API do Gemini está ativada no Google Cloud." }
         }
 
         if (response.status === 404) {
@@ -112,11 +122,12 @@ export default function Page() {
 
         return { valid: false, error: `Erro ao validar chave Gemini: ${errorMsg}` }
 
-      } catch (error: any) {
-        if (error.name === "TypeError" && error.message.includes("fetch")) {
+      } catch (error: unknown) {
+        if (error instanceof TypeError && error.message.includes("fetch")) {
           return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
         }
-        return { valid: false, error: `Erro ao validar chave Gemini: ${error.message}` }
+        const msg = error instanceof Error ? error.message : String(error)
+        return { valid: false, error: `Erro ao validar chave Gemini: ${msg}` }
       }
     }
 
@@ -131,12 +142,7 @@ export default function Page() {
           },
           body: JSON.stringify({
             model: "deepseek/deepseek-chat",
-            messages: [
-              {
-                role: "user",
-                content: "test",
-              },
-            ],
+            messages: [{ role: "user", content: "test" }],
           }),
         })
 
@@ -169,11 +175,12 @@ export default function Page() {
 
         return { valid: false, error: `Erro ao validar chave DeepSeek: ${errorMsg}` }
 
-      } catch (error: any) {
-        if (error.name === "TypeError" && error.message.includes("fetch")) {
+      } catch (error: unknown) {
+        if (error instanceof TypeError && error.message.includes("fetch")) {
           return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
         }
-        return { valid: false, error: `Erro ao validar chave DeepSeek: ${error.message}` }
+        const msg = error instanceof Error ? error.message : String(error)
+        return { valid: false, error: `Erro ao validar chave DeepSeek: ${msg}` }
       }
     }
 
@@ -187,20 +194,26 @@ export default function Page() {
     return `javascript:(()=>{try{const INJECT_KEYS=[${geminiKeys}];const INJECT_DEEPSEEK="${deepseekKey}";const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");code=code.replace(/const\\s+OPENROUTER_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const OPENROUTER_API_KEYS = [\\\""+INJECT_DEEPSEEK+"\\\"];");}catch(e){console.error('inj',e);}finally{window.eval=_o;}return _o(code);};const url="https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js?_="+Date.now();fetch(url,{cache:"no-store",credentials:"omit"}).then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`;
   }
 
-  // Função chamada para gerar o script (seja direto ou após confirmar no modal)
   const finalizeGeneration = async (keys: KeyData[]) => {
     const bookmarklet = generateBookmarklet(keys)
     setGeneratedScript(bookmarklet)
     setShowResult(true)
     setStatusMessage({ text: `✓ Script gerado com sucesso com ${keys.length} chave(s)!`, type: "success" })
     setIsLoading(false)
+
+    try {
+      const keysToSave = apiKeys.filter(k => k.value.trim() !== "");
+      localStorage.setItem('wayground_api_keys', JSON.stringify(keysToSave));
+    } catch (e) {
+      console.error("Falha ao salvar chaves no localStorage", e);
+    }
   }
 
   const handleGenerate = async () => {
-    const apiKeys = getAllApiKeys()
+    const validApiKeys = getValidApiKeysData()
 
-    if (apiKeys.length === 0) {
-      setStatusMessage({ text: "Por favor, insira pelo menos uma chave API.", type: "error" })
+    if (validApiKeys.length === 0) {
+      setStatusMessage({ text: "Por favor, insira pelo menos uma chave API válida.", type: "error" })
       return
     }
 
@@ -209,81 +222,42 @@ export default function Page() {
     setIsLoading(true)
 
     try {
-      setStatusMessage({ text: `Validando ${apiKeys.length} chave(s) API...`, type: "success" })
+      setStatusMessage({ text: `Validando ${validApiKeys.length} chave(s) API...`, type: "success" })
 
       const validations = await Promise.all(
-        apiKeys.map((key, index) => validateApiKey(key.key, key.type).then((result) => ({ ...result, index: index + 1 }))),
+        validApiKeys.map((key, index) => validateApiKey(key.key, key.type).then((result) => ({ ...result, index: index + 1 }))),
       )
 
       const invalidKeys = validations.filter((v) => !v.valid)
 
       if (invalidKeys.length > 0) {
-        // Se houver erros, prepara e mostra o modal
         const errorMessages = invalidKeys.map((v) => `Chave ${v.index}: ${v.error}`).join("\n")
         
         setModalErrorText(errorMessages)
-        setPendingApiKeys(apiKeys) // Salva as chaves para uso posterior se o usuário aceitar
+        setPendingApiKeys(validApiKeys)
         setShowErrorModal(true)
-        setIsLoading(false) // Para o loading pois vai esperar input do usuário
+        setIsLoading(false)
         return
       }
 
       setStatusMessage({ text: "✓ Todas as chaves são válidas! Gerando seu script...", type: "success" })
       await new Promise((resolve) => setTimeout(resolve, 500))
-      finalizeGeneration(apiKeys)
+      finalizeGeneration(validApiKeys)
 
-    } catch (error: any) {
-      setStatusMessage({ text: `Erro inesperado: ${error.message}`, type: "error" })
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error)
+      setStatusMessage({ text: `Erro inesperado: ${msg}`, type: "error" })
       setIsLoading(false)
     }
   }
 
   const handleCopy = async () => {
-    if (navigator.permissions && navigator.permissions.query) {
-      try {
-        const permissionStatus = await navigator.permissions.query({ name: "clipboard-write" as PermissionName });
-
-        if (permissionStatus.state === 'granted' || permissionStatus.state === 'prompt') {
-          try {
-            await navigator.clipboard.writeText(generatedScript);
-            
-            const btn = document.getElementById("copyBtn");
-            if (btn) {
-              const originalHTML = btn.innerHTML;
-              btn.innerHTML = `
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Copiado!
-              `;
-              setTimeout(() => {
-                btn.innerHTML = originalHTML;
-              }, 2000);
-            }
-          } catch (err) {
-            setStatusMessage({ text: "A permissão para copiar foi negada pelo usuário.", type: "error" });
-          }
-        } else if (permissionStatus.state === 'denied') {
-          setStatusMessage({
-            text: "Acesso à área de transferência bloqueado. Por favor, habilite a permissão nas configurações do seu navegador para este site.",
-            type: "error",
-          });
-        }
-      } catch (error) {
-        setStatusMessage({ text: "Não foi possível verificar a permissão para copiar.", type: "error" });
-      }
-    } else {
-      try {
-        await navigator.clipboard.writeText(generatedScript);
-        const btn = document.getElementById("copyBtn");
-        if (btn) {
-          const originalHTML = btn.innerHTML;
-          btn.innerHTML = `... Copiado! ...`;
-          setTimeout(() => { btn.innerHTML = originalHTML; }, 2000);
-        }
-      } catch (error) {
-        setStatusMessage({ text: "Erro ao copiar. Tente selecionar e copiar manualmente.", type: "error" });
-      }
+    try {
+      await navigator.clipboard.writeText(generatedScript);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (error) {
+      setStatusMessage({ text: "Erro ao copiar. Tente selecionar e copiar manualmente.", type: "error" });
     }
   };
 
@@ -300,28 +274,31 @@ export default function Page() {
   }
 
   const addKeyInput = () => {
-    if (keyCount < MAX_KEYS) {
-      setKeyCount(keyCount + 1)
+    if (apiKeys.length < MAX_KEYS) {
+      setApiKeys([...apiKeys, { value: "", type: "unknown" }])
     }
   }
 
-  const removeKeyInput = (index: number) => {
-    if (keyCount > 1) {
-      const input = document.getElementById(`apiKey${index}`) as HTMLInputElement
-      if (input) {
-        input.value = ""
-      }
-      setKeyCount(keyCount - 1)
+  const removeKeyInput = (indexToRemove: number) => {
+    if (apiKeys.length > 1) {
+      setApiKeys(apiKeys.filter((_, index) => index !== indexToRemove))
     }
   }
 
-  // Funções do Modal
+  const handleKeyChange = (index: number, newValue: string) => {
+    const updatedKeys = [...apiKeys]
+    updatedKeys[index] = {
+      value: newValue,
+      type: detectKeyType(newValue.trim())
+    }
+    setApiKeys(updatedKeys)
+  }
+
   const confirmGeneration = () => {
     setShowErrorModal(false)
     setIsLoading(true)
     setStatusMessage({ text: "Gerando script apesar dos erros...", type: "success" })
     
-    // Pequeno delay para UX
     setTimeout(() => {
       finalizeGeneration(pendingApiKeys)
     }, 500)
@@ -331,6 +308,10 @@ export default function Page() {
     setShowErrorModal(false)
     setStatusMessage({ text: "Geração cancelada devido aos erros de validação.", type: "error" })
     setIsLoading(false)
+  }
+
+  if (!isLoaded) {
+    return <div style={{ minHeight: '100vh', background: '#0a0a0a' }}></div>
   }
 
   return (
@@ -750,7 +731,7 @@ export default function Page() {
 
         .modal-content {
           background: rgba(25, 25, 25, 0.95);
-          border: 1px solid rgba(239, 68, 68, 0.5); /* Borda vermelha para alerta */
+          border: 1px solid rgba(239, 68, 68, 0.5);
           border-radius: 20px;
           padding: 30px;
           width: 90%;
@@ -891,7 +872,6 @@ export default function Page() {
         }
       `}</style>
 
-      {/* MODAL COMPONENT */}
       {showErrorModal && (
         <div className="modal-overlay">
           <div className="modal-content">
@@ -942,15 +922,11 @@ export default function Page() {
             </div>
 
             <div id="keysContainer">
-              {Array.from({ length: keyCount }).map((_, index) => {
-                const input = typeof document !== 'undefined' ? (document.getElementById(`apiKey${index}`) as HTMLInputElement) : null
-                const keyValue = input?.value.trim() || ""
-                const detectedType = keyValue ? detectKeyType(keyValue) : "unknown"
-                const typeLabel = detectedType === "gemini" ? "⭐ Gemini" : detectedType === "deepseek" ? "🐋 DeepSeek" : "🔑 DeepSeek ou Gemini"
-                const typeColor = detectedType === "gemini" ? "#a78bfa" : detectedType === "deepseek" ? "#ec4899" : "#666"
+              {apiKeys.map((keyObj, index) => {
+                const typeLabel = keyObj.type === "gemini" ? "⭐ Gemini" : keyObj.type === "deepseek" ? "🐋 DeepSeek" : "🔑 DeepSeek ou Gemini"
 
                 return (
-                  <div key={index} className="input-group" data-key-index={index}>
+                  <div key={index} className="input-group">
                     <label htmlFor={`apiKey${index}`}>
                       Chave API - {typeLabel}
                     </label>
@@ -968,23 +944,17 @@ export default function Page() {
                       className="api-key-input"
                       placeholder="Cole sua chave Gemini (AIza...) ou DeepSeek (sk-or-v1...)..."
                       autoComplete="off"
+                      value={keyObj.value}
                       onKeyPress={(e) => e.key === "Enter" && handleGenerate()}
-                      onChange={() => {
-                        const newTypes = [...keyTypes]
-                        const input = document.getElementById(`apiKey${index}`) as HTMLInputElement
-                        if (input) {
-                          newTypes[index] = detectKeyType(input.value.trim())
-                          setKeyTypes(newTypes)
-                        }
-                      }}
+                      onChange={(e) => handleKeyChange(index, e.target.value)}
                     />
                   </div>
                 )
               })}
             </div>
 
-            <button className="add-key-btn" onClick={addKeyInput} disabled={keyCount >= MAX_KEYS}>
-              {keyCount >= MAX_KEYS ? (
+            <button className="add-key-btn" onClick={addKeyInput} disabled={apiKeys.length >= MAX_KEYS}>
+              {apiKeys.length >= MAX_KEYS ? (
                 "Limite de 3 chaves atingido"
               ) : (
                 <>
@@ -1019,12 +989,23 @@ export default function Page() {
                   <code>{generatedScript}</code>
                 </div>
                 <div className="button-group">
-                  <button id="copyBtn" className="action-btn" onClick={handleCopy}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                    Copiar Script
+                  <button className="action-btn" onClick={handleCopy}>
+                    {isCopied ? (
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Copiado!
+                      </>
+                    ) : (
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        Copiar Script
+                      </>
+                    )}
                   </button>
                   <button className="action-btn secondary" onClick={handleDownload}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
