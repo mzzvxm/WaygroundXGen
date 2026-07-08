@@ -19,6 +19,11 @@ interface ApiKeyInput {
   model?: string
 }
 
+interface ApiKeyInput {
+  value: string
+  type: "gemini" | "deepseek" | "unknown"
+}
+
 export default function Page() {
   const [apiKeys, setApiKeys] = useState<ApiKeyInput[]>([{ value: "", type: "unknown" }])
   const [statusMessage, setStatusMessage] = useState({ text: "", type: "" })
@@ -324,7 +329,6 @@ export default function Page() {
       setStatusMessage({ text: "✓ Chaves salvas foram apagadas.", type: "success" })
     }
   }
-
   const confirmGeneration = () => {
     setShowErrorModal(false)
     setIsLoading(true)
