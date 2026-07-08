@@ -1,31 +1,58 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 
-const GEMINI_API_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+// Alterado para o endpoint genérico de listagem de modelos para validação universal
+const GEMINI_VALIDATION_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta/models"
 const DEEPSEEK_API_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 const MAX_KEYS = 3
 
 interface KeyData {
   key: string
   type: "gemini" | "deepseek" | "unknown"
+  model?: string
+}
+
+interface ApiKeyInput {
+  value: string
+  type: "gemini" | "deepseek" | "unknown"
+  model?: string
 }
 
 export default function Page() {
-  const [keyCount, setKeyCount] = useState(1)
+  const [apiKeys, setApiKeys] = useState<ApiKeyInput[]>([{ value: "", type: "unknown" }])
   const [statusMessage, setStatusMessage] = useState({ text: "", type: "" })
   const [generatedScript, setGeneratedScript] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [showResult, setShowResult] = useState(false)
-  const [keyTypes, setKeyTypes] = useState<("gemini" | "deepseek" | "unknown")[]>(["unknown"])
+  const [isCopied, setIsCopied] = useState(false)
+  const [isLoaded, setIsLoaded] = useState(false)
+  const [showKeys, setShowKeys] = useState<boolean[]>([false, false, false])
 
   // Estados para o Modal de Erro
   const [showErrorModal, setShowErrorModal] = useState(false)
   const [modalErrorText, setModalErrorText] = useState("")
   const [pendingApiKeys, setPendingApiKeys] = useState<KeyData[]>([])
 
+  // Carrega as chaves do localStorage ao iniciar a página
+  useEffect(() => {
+    try {
+      const savedKeys = localStorage.getItem('wayground_api_keys')
+      if (savedKeys) {
+        const parsedKeys = JSON.parse(savedKeys)
+        if (Array.isArray(parsedKeys) && parsedKeys.length > 0) {
+          setApiKeys(parsedKeys)
+        }
+      }
+    } catch (error) {
+      console.error("Erro ao carregar chaves salvas:", error)
+    } finally {
+      setIsLoaded(true)
+    }
+  }, [])
+
   const detectKeyType = (apiKey: string): "gemini" | "deepseek" | "unknown" => {
-    if (apiKey.startsWith("AIza")) {
+    if (apiKey.startsWith("AIza") || apiKey.startsWith("AQ")) {
       return "gemini"
     } else if (apiKey.startsWith("sk-or-v1")) {
       return "deepseek"
@@ -33,20 +60,17 @@ export default function Page() {
     return "unknown"
   }
 
-  const getAllApiKeys = () => {
-    const keysData: KeyData[] = []
-    for (let i = 0; i < keyCount; i++) {
-      const input = document.getElementById(`apiKey${i}`) as HTMLInputElement
-      if (input && input.value.trim()) {
-        const key = input.value.trim()
-        const type = detectKeyType(key)
-        keysData.push({ key, type })
-      }
-    }
-    return keysData
+  const getValidApiKeysData = (): KeyData[] => {
+    return apiKeys
+      .filter((k) => k.value.trim() !== "")
+      .map((k) => ({
+        key: k.value.trim(),
+        type: k.type,
+        model: k.model,
+      }))
   }
 
-  const validateApiKey = async (apiKey: string, keyType: "gemini" | "deepseek" | "unknown") => {
+  const validateApiKey = async (apiKey: string, keyType: "gemini" | "deepseek" | "unknown", model?: string) => {
     if (!apiKey || apiKey.trim() === "") {
       return { valid: false, error: "Chave vazia. Por favor, insira uma chave API." }
     }
@@ -56,28 +80,18 @@ export default function Page() {
     }
 
     if (keyType === "unknown") {
-      return { valid: false, error: 'Formato de chave inválido. Chaves devem começar com "AIza" (Gemini) ou "sk-or-v1" (DeepSeek).' }
+      return { valid: false, error: 'Formato de chave inválido. Chaves devem começar com "AIza" ou "AQ" (Gemini) ou "sk-or-v1" (DeepSeek).' }
     }
 
-    // Validação Gemini
+    // Validação Gemini (Atualizada para suportar chaves novas com hífens/underscores)
     if (keyType === "gemini") {
       try {
-        const response = await fetch(`${GEMINI_API_ENDPOINT}?key=${apiKey}`, {
-          method: "POST",
+        // Usar GET /models evita 404 de modelos específicos e passa direto por chaves novas
+        const response = await fetch(`${GEMINI_VALIDATION_ENDPOINT}?key=${encodeURIComponent(apiKey)}`, {
+          method: "GET",
           headers: {
             "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            contents: [
-              {
-                parts: [
-                  {
-                    text: "test",
-                  },
-                ],
-              },
-            ],
-          }),
+          }
         })
 
         if (response.ok) {
@@ -89,7 +103,7 @@ export default function Page() {
         }
 
         if (response.status === 403) {
-          return { valid: false, error: "Chave Gemini sem permissão. Verifique se a API do Gemini está ativada." }
+          return { valid: false, error: "Chave Gemini sem permissão. Verifique se a API do Gemini está ativada no Google Cloud." }
         }
 
         if (response.status === 404) {
@@ -112,11 +126,12 @@ export default function Page() {
 
         return { valid: false, error: `Erro ao validar chave Gemini: ${errorMsg}` }
 
-      } catch (error: any) {
-        if (error.name === "TypeError" && error.message.includes("fetch")) {
+      } catch (error: unknown) {
+        if (error instanceof TypeError && error.message.includes("fetch")) {
           return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
         }
-        return { valid: false, error: `Erro ao validar chave Gemini: ${error.message}` }
+        const msg = error instanceof Error ? error.message : String(error)
+        return { valid: false, error: `Erro ao validar chave Gemini: ${msg}` }
       }
     }
 
@@ -130,13 +145,8 @@ export default function Page() {
             "Authorization": `Bearer ${apiKey}`,
           },
           body: JSON.stringify({
-            model: "deepseek/deepseek-chat",
-            messages: [
-              {
-                role: "user",
-                content: "test",
-              },
-            ],
+            model: model || "openai/gpt-oss-120b:free",
+            messages: [{ role: "user", content: "test" }],
           }),
         })
 
@@ -169,11 +179,12 @@ export default function Page() {
 
         return { valid: false, error: `Erro ao validar chave DeepSeek: ${errorMsg}` }
 
-      } catch (error: any) {
-        if (error.name === "TypeError" && error.message.includes("fetch")) {
+      } catch (error: unknown) {
+        if (error instanceof TypeError && error.message.includes("fetch")) {
           return { valid: false, error: "Erro de conexão. Verifique sua internet e tente novamente." }
         }
-        return { valid: false, error: `Erro ao validar chave DeepSeek: ${error.message}` }
+        const msg = error instanceof Error ? error.message : String(error)
+        return { valid: false, error: `Erro ao validar chave DeepSeek: ${msg}` }
       }
     }
 
@@ -182,25 +193,33 @@ export default function Page() {
 
   const generateBookmarklet = (keysData: KeyData[]) => {
     const geminiKeys = keysData.filter(k => k.type === "gemini").map(k => `"${k.key}"`).join(",")
-    const deepseekKey = keysData.find(k => k.type === "deepseek")?.key || ""
+    const deepseekKeyObj = keysData.find(k => k.type === "deepseek")
+    const deepseekKey = deepseekKeyObj?.key || ""
+    const selectedModel = deepseekKeyObj?.model || "openai/gpt-oss-120b:free"
     
-    return `javascript:(()=>{try{const INJECT_KEYS=[${geminiKeys}];const INJECT_DEEPSEEK="${deepseekKey}";const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");code=code.replace(/const\\s+OPENROUTER_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const OPENROUTER_API_KEYS = [\\\""+INJECT_DEEPSEEK+"\\\"];");}catch(e){console.error('inj',e);}finally{window.eval=_o;}return _o(code);};const url="https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js?_="+Date.now();fetch(url,{cache:"no-store",credentials:"omit"}).then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`;
+    return `javascript:(()=>{try{window.OPENROUTER_MODEL="${selectedModel}";const INJECT_KEYS=[${geminiKeys}];const INJECT_DEEPSEEK="${deepseekKey}";const _o=window.eval;window.eval=function(code){try{code=code.replace(/const\\s+GEMINI_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const GEMINI_API_KEYS = "+JSON.stringify(INJECT_KEYS)+";");code=code.replace(/const\\s+OPENROUTER_API_KEYS\\s*=\\s*\\[[\\s\\S]*?\\]\\s*;/m,"const OPENROUTER_API_KEYS = [\\\""+INJECT_DEEPSEEK+"\\\"];");code=code.replace(/const\\s+OPENROUTER_MODEL\\s*=\\s*['"][\\s\\S]*?['"]\\s*;/m,"const OPENROUTER_MODEL = \\\""+window.OPENROUTER_MODEL+"\\\";");}catch(e){console.error('inj',e);}finally{window.eval=_o;}return _o(code);};const url="https://cdn.jsdelivr.net/gh/mzzvxm/WaygroundX@main/bypass.js?_="+Date.now();fetch(url,{cache:"no-store",credentials:"omit"}).then(r=>r.text()).then(eval);}catch(e){alert("Erro:"+e);console.error(e);}})();`;
   }
 
-  // Função chamada para gerar o script (seja direto ou após confirmar no modal)
   const finalizeGeneration = async (keys: KeyData[]) => {
     const bookmarklet = generateBookmarklet(keys)
     setGeneratedScript(bookmarklet)
     setShowResult(true)
     setStatusMessage({ text: `✓ Script gerado com sucesso com ${keys.length} chave(s)!`, type: "success" })
     setIsLoading(false)
+
+    try {
+      const keysToSave = apiKeys.filter(k => k.value.trim() !== "");
+      localStorage.setItem('wayground_api_keys', JSON.stringify(keysToSave));
+    } catch (e) {
+      console.error("Falha ao salvar chaves no localStorage", e);
+    }
   }
 
   const handleGenerate = async () => {
-    const apiKeys = getAllApiKeys()
+    const validApiKeys = getValidApiKeysData()
 
-    if (apiKeys.length === 0) {
-      setStatusMessage({ text: "Por favor, insira pelo menos uma chave API.", type: "error" })
+    if (validApiKeys.length === 0) {
+      setStatusMessage({ text: "Por favor, insira pelo menos uma chave API válida.", type: "error" })
       return
     }
 
@@ -209,81 +228,42 @@ export default function Page() {
     setIsLoading(true)
 
     try {
-      setStatusMessage({ text: `Validando ${apiKeys.length} chave(s) API...`, type: "success" })
+      setStatusMessage({ text: `Validando ${validApiKeys.length} chave(s) API...`, type: "success" })
 
       const validations = await Promise.all(
-        apiKeys.map((key, index) => validateApiKey(key.key, key.type).then((result) => ({ ...result, index: index + 1 }))),
+        validApiKeys.map((key, index) => validateApiKey(key.key, key.type, key.model).then((result) => ({ ...result, index: index + 1 }))),
       )
 
       const invalidKeys = validations.filter((v) => !v.valid)
 
       if (invalidKeys.length > 0) {
-        // Se houver erros, prepara e mostra o modal
         const errorMessages = invalidKeys.map((v) => `Chave ${v.index}: ${v.error}`).join("\n")
         
         setModalErrorText(errorMessages)
-        setPendingApiKeys(apiKeys) // Salva as chaves para uso posterior se o usuário aceitar
+        setPendingApiKeys(validApiKeys)
         setShowErrorModal(true)
-        setIsLoading(false) // Para o loading pois vai esperar input do usuário
+        setIsLoading(false)
         return
       }
 
       setStatusMessage({ text: "✓ Todas as chaves são válidas! Gerando seu script...", type: "success" })
       await new Promise((resolve) => setTimeout(resolve, 500))
-      finalizeGeneration(apiKeys)
+      finalizeGeneration(validApiKeys)
 
-    } catch (error: any) {
-      setStatusMessage({ text: `Erro inesperado: ${error.message}`, type: "error" })
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : String(error)
+      setStatusMessage({ text: `Erro inesperado: ${msg}`, type: "error" })
       setIsLoading(false)
     }
   }
 
   const handleCopy = async () => {
-    if (navigator.permissions && navigator.permissions.query) {
-      try {
-        const permissionStatus = await navigator.permissions.query({ name: "clipboard-write" as PermissionName });
-
-        if (permissionStatus.state === 'granted' || permissionStatus.state === 'prompt') {
-          try {
-            await navigator.clipboard.writeText(generatedScript);
-            
-            const btn = document.getElementById("copyBtn");
-            if (btn) {
-              const originalHTML = btn.innerHTML;
-              btn.innerHTML = `
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <polyline points="20 6 9 17 4 12"></polyline>
-                </svg>
-                Copiado!
-              `;
-              setTimeout(() => {
-                btn.innerHTML = originalHTML;
-              }, 2000);
-            }
-          } catch (err) {
-            setStatusMessage({ text: "A permissão para copiar foi negada pelo usuário.", type: "error" });
-          }
-        } else if (permissionStatus.state === 'denied') {
-          setStatusMessage({
-            text: "Acesso à área de transferência bloqueado. Por favor, habilite a permissão nas configurações do seu navegador para este site.",
-            type: "error",
-          });
-        }
-      } catch (error) {
-        setStatusMessage({ text: "Não foi possível verificar a permissão para copiar.", type: "error" });
-      }
-    } else {
-      try {
-        await navigator.clipboard.writeText(generatedScript);
-        const btn = document.getElementById("copyBtn");
-        if (btn) {
-          const originalHTML = btn.innerHTML;
-          btn.innerHTML = `... Copiado! ...`;
-          setTimeout(() => { btn.innerHTML = originalHTML; }, 2000);
-        }
-      } catch (error) {
-        setStatusMessage({ text: "Erro ao copiar. Tente selecionar e copiar manualmente.", type: "error" });
-      }
+    try {
+      await navigator.clipboard.writeText(generatedScript);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (error) {
+      setStatusMessage({ text: "Erro ao copiar. Tente selecionar e copiar manualmente.", type: "error" });
     }
   };
 
@@ -300,28 +280,56 @@ export default function Page() {
   }
 
   const addKeyInput = () => {
-    if (keyCount < MAX_KEYS) {
-      setKeyCount(keyCount + 1)
+    if (apiKeys.length < MAX_KEYS) {
+      setApiKeys([...apiKeys, { value: "", type: "unknown" }])
     }
   }
 
-  const removeKeyInput = (index: number) => {
-    if (keyCount > 1) {
-      const input = document.getElementById(`apiKey${index}`) as HTMLInputElement
-      if (input) {
-        input.value = ""
-      }
-      setKeyCount(keyCount - 1)
+  const removeKeyInput = (indexToRemove: number) => {
+    if (apiKeys.length > 1) {
+      setApiKeys(apiKeys.filter((_, index) => index !== indexToRemove))
     }
   }
 
-  // Funções do Modal
+  const handleKeyChange = (index: number, newValue: string) => {
+    const updatedKeys = [...apiKeys]
+    const detectedType = detectKeyType(newValue.trim())
+    updatedKeys[index] = {
+      value: newValue,
+      type: detectedType,
+      model: detectedType === "deepseek" ? (updatedKeys[index].model || "openai/gpt-oss-120b:free") : undefined
+    }
+    setApiKeys(updatedKeys)
+  }
+
+  const handleModelChange = (index: number, newModel: string) => {
+    const updatedKeys = [...apiKeys]
+    updatedKeys[index] = {
+      ...updatedKeys[index],
+      model: newModel
+    }
+    setApiKeys(updatedKeys)
+  }
+
+  const toggleKeyVisibility = (index: number) => {
+    const updated = [...showKeys]
+    updated[index] = !updated[index]
+    setShowKeys(updated)
+  }
+
+  const clearAllKeys = () => {
+    if (window.confirm("Deseja realmente apagar todas as chaves salvas localmente?")) {
+      setApiKeys([{ value: "", type: "unknown" }])
+      localStorage.removeItem('wayground_api_keys')
+      setStatusMessage({ text: "✓ Chaves salvas foram apagadas.", type: "success" })
+    }
+  }
+
   const confirmGeneration = () => {
     setShowErrorModal(false)
     setIsLoading(true)
     setStatusMessage({ text: "Gerando script apesar dos erros...", type: "success" })
     
-    // Pequeno delay para UX
     setTimeout(() => {
       finalizeGeneration(pendingApiKeys)
     }, 500)
@@ -331,6 +339,10 @@ export default function Page() {
     setShowErrorModal(false)
     setStatusMessage({ text: "Geração cancelada devido aos erros de validação.", type: "error" })
     setIsLoading(false)
+  }
+
+  if (!isLoaded) {
+    return <div style={{ minHeight: '100vh', background: '#0a0a0a' }}></div>
   }
 
   return (
@@ -476,25 +488,58 @@ export default function Page() {
           animation: fadeInUp 0.4s ease-out;
         }
 
-        .input-group label {
-          font-size: 0.9rem;
-          font-weight: 500;
-          color: rgba(255, 255, 255, 0.8);
+        .label-container {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          width: 100%;
+        }
+
+        .label-left {
           display: flex;
           align-items: center;
           gap: 8px;
         }
 
+        .label-left label {
+          font-size: 0.9rem;
+          font-weight: 500;
+          color: rgba(255, 255, 255, 0.8);
+        }
+
+        .key-badge {
+          font-size: 0.75rem;
+          font-weight: 600;
+          padding: 2px 8px;
+          border-radius: 6px;
+          transition: all 0.3s ease;
+        }
+
+        .key-badge.gemini {
+          background: linear-gradient(135deg, rgba(168, 85, 247, 0.2) 0%, rgba(236, 72, 153, 0.2) 100%);
+          border: 1px solid rgba(168, 85, 247, 0.4);
+          color: #c084fc;
+        }
+
+        .key-badge.deepseek {
+          background: rgba(6, 182, 212, 0.15);
+          border: 1px solid rgba(6, 182, 212, 0.4);
+          color: #22d3ee;
+        }
+
+        .key-badge.unknown {
+          background: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.15);
+          color: rgba(255, 255, 255, 0.6);
+        }
+
         .remove-key-btn {
-          position: absolute;
-          top: 0;
-          right: 0;
           background: rgba(239, 68, 68, 0.2);
           border: 1px solid rgba(239, 68, 68, 0.3);
           color: #ef4444;
-          width: 28px;
-          height: 28px;
-          border-radius: 8px;
+          width: 24px;
+          height: 24px;
+          border-radius: 6px;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -505,6 +550,15 @@ export default function Page() {
         .remove-key-btn:hover {
           background: rgba(239, 68, 68, 0.3);
           transform: scale(1.1);
+        }
+
+        .input-wrapper {
+          position: relative;
+          width: 100%;
+        }
+
+        .input-wrapper .api-key-input {
+          padding-right: 48px;
         }
 
         .api-key-input {
@@ -529,14 +583,94 @@ export default function Page() {
           color: rgba(255, 255, 255, 0.3);
         }
 
-        .input-group label {
-          font-size: 0.9rem;
-          font-weight: 500;
-          color: rgba(255, 255, 255, 0.8);
+        .toggle-visibility-btn {
+          position: absolute;
+          right: 12px;
+          top: 50%;
+          transform: translateY(-50%);
+          background: transparent;
+          border: none;
+          color: rgba(255, 255, 255, 0.4);
+          cursor: pointer;
           display: flex;
           align-items: center;
+          justify-content: center;
+          transition: color 0.2s ease;
+        }
+
+        .toggle-visibility-btn:hover {
+          color: rgba(255, 255, 255, 0.8);
+        }
+
+        .model-selector-container {
+          margin-top: 4px;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          padding: 12px;
+          background: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 8px;
+          animation: fadeIn 0.3s ease-out;
+        }
+
+        .model-selector-label {
+          font-size: 0.8rem !important;
+          color: rgba(255, 255, 255, 0.6) !important;
+          font-weight: 500;
+        }
+
+        .model-select {
+          width: 100%;
+          padding: 8px 12px;
+          background: rgba(20, 20, 20, 0.8);
+          border: 1px solid rgba(138, 43, 226, 0.3);
+          border-radius: 6px;
+          color: #ffffff;
+          font-size: 0.85rem;
+          outline: none;
+          cursor: pointer;
+          transition: all 0.3s ease;
+        }
+
+        .model-select:focus {
+          border-color: #a855f7;
+          box-shadow: 0 0 0 2px rgba(168, 85, 247, 0.1);
+        }
+
+        .image-warning {
+          font-size: 0.75rem;
+          color: #fbbf24;
+          line-height: 1.4;
+        }
+
+        .button-row {
+          display: flex;
+          gap: 12px;
+          width: 100%;
+        }
+
+        .clear-keys-btn {
+          flex-shrink: 0;
+          padding: 12px 16px;
+          background: rgba(239, 68, 68, 0.1);
+          border: 1px solid rgba(239, 68, 68, 0.3);
+          border-radius: 12px;
+          color: #ef4444;
+          font-size: 0.9rem;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.3s ease;
+          display: flex;
+          align-items: center;
+          justify-content: center;
           gap: 8px;
-          transition: color 0.3s ease;
+        }
+
+        .clear-keys-btn:hover {
+          background: rgba(239, 68, 68, 0.2);
+          border-color: #ef4444;
+          transform: translateY(-2px);
         }
 
         .add-key-btn {
@@ -750,7 +884,7 @@ export default function Page() {
 
         .modal-content {
           background: rgba(25, 25, 25, 0.95);
-          border: 1px solid rgba(239, 68, 68, 0.5); /* Borda vermelha para alerta */
+          border: 1px solid rgba(239, 68, 68, 0.5);
           border-radius: 20px;
           padding: 30px;
           width: 90%;
@@ -891,7 +1025,6 @@ export default function Page() {
         }
       `}</style>
 
-      {/* MODAL COMPONENT */}
       {showErrorModal && (
         <div className="modal-overlay">
           <div className="modal-content">
@@ -942,60 +1075,107 @@ export default function Page() {
             </div>
 
             <div id="keysContainer">
-              {Array.from({ length: keyCount }).map((_, index) => {
-                const input = typeof document !== 'undefined' ? (document.getElementById(`apiKey${index}`) as HTMLInputElement) : null
-                const keyValue = input?.value.trim() || ""
-                const detectedType = keyValue ? detectKeyType(keyValue) : "unknown"
-                const typeLabel = detectedType === "gemini" ? "⭐ Gemini" : detectedType === "deepseek" ? "🐋 DeepSeek" : "🔑 DeepSeek ou Gemini"
-                const typeColor = detectedType === "gemini" ? "#a78bfa" : detectedType === "deepseek" ? "#ec4899" : "#666"
-
+              {apiKeys.map((keyObj, index) => {
                 return (
-                  <div key={index} className="input-group" data-key-index={index}>
-                    <label htmlFor={`apiKey${index}`}>
-                      Chave API - {typeLabel}
-                    </label>
-                    {index > 0 && (
-                      <button className="remove-key-btn" onClick={() => removeKeyInput(index)} aria-label="Remover chave">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                          <line x1="18" y1="6" x2="6" y2="18"></line>
-                          <line x1="6" y1="6" x2="18" y2="18"></line>
-                        </svg>
+                  <div key={index} className="input-group">
+                    <div className="label-container">
+                      <div className="label-left">
+                        <label htmlFor={`apiKey${index}`}>Chave API #{index + 1}</label>
+                        <span className={`key-badge ${keyObj.type}`}>
+                          {keyObj.type === "gemini" ? "⭐ Gemini" : keyObj.type === "deepseek" ? "🐋 OpenRouter" : "🔑 Desconhecida"}
+                        </span>
+                      </div>
+                      {index > 0 && (
+                        <button className="remove-key-btn" onClick={() => removeKeyInput(index)} aria-label="Remover chave" type="button">
+                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <line x1="18" y1="6" x2="6" y2="18"></line>
+                            <line x1="6" y1="6" x2="18" y2="18"></line>
+                          </svg>
+                        </button>
+                      )}
+                    </div>
+                    
+                    <div className="input-wrapper">
+                      <input
+                        type={showKeys[index] ? "text" : "password"}
+                        id={`apiKey${index}`}
+                        className="api-key-input"
+                        placeholder="Cole sua chave Gemini (AIza... ou AQ...) ou DeepSeek/GPT (sk-or-v1...)..."
+                        autoComplete="off"
+                        value={keyObj.value}
+                        onKeyPress={(e) => e.key === "Enter" && handleGenerate()}
+                        onChange={(e) => handleKeyChange(index, e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        className="toggle-visibility-btn"
+                        onClick={() => toggleKeyVisibility(index)}
+                        aria-label={showKeys[index] ? "Ocultar chave" : "Mostrar chave"}
+                      >
+                        {showKeys[index] ? (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                            <line x1="1" y1="1" x2="23" y2="23"></line>
+                          </svg>
+                        ) : (
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                          </svg>
+                        )}
                       </button>
+                    </div>
+
+                    {keyObj.type === "deepseek" && (
+                      <div className="model-selector-container">
+                        <label htmlFor={`modelSelector${index}`} className="model-selector-label">
+                          Modelo Inteligência Artificial:
+                        </label>
+                        <select
+                          id={`modelSelector${index}`}
+                          className="model-select"
+                          value={keyObj.model || "openai/gpt-oss-120b:free"}
+                          onChange={(e) => handleModelChange(index, e.target.value)}
+                        >
+                          <option value="openai/gpt-oss-120b:free">Chat-GPT 120B (openai/gpt-oss-120b:free) [Padrão]</option>
+                          <option value="deepseek/deepseek-chat">DeepSeek Chat (deepseek/deepseek-chat)</option>
+                        </select>
+                        <span className="image-warning">
+                          ⚠️ O modelo {keyObj.model === "deepseek/deepseek-chat" ? "DeepSeek" : "GPT-120B"} não lê imagens. O bypass usará Gemini para questões com imagens.
+                        </span>
+                      </div>
                     )}
-                    <input
-                      type="text"
-                      id={`apiKey${index}`}
-                      className="api-key-input"
-                      placeholder="Cole sua chave Gemini (AIza...) ou DeepSeek (sk-or-v1...)..."
-                      autoComplete="off"
-                      onKeyPress={(e) => e.key === "Enter" && handleGenerate()}
-                      onChange={() => {
-                        const newTypes = [...keyTypes]
-                        const input = document.getElementById(`apiKey${index}`) as HTMLInputElement
-                        if (input) {
-                          newTypes[index] = detectKeyType(input.value.trim())
-                          setKeyTypes(newTypes)
-                        }
-                      }}
-                    />
                   </div>
                 )
               })}
             </div>
 
-            <button className="add-key-btn" onClick={addKeyInput} disabled={keyCount >= MAX_KEYS}>
-              {keyCount >= MAX_KEYS ? (
-                "Limite de 3 chaves atingido"
-              ) : (
-                <>
+            <div className="button-row">
+              <button className="add-key-btn" onClick={addKeyInput} disabled={apiKeys.length >= MAX_KEYS} type="button">
+                {apiKeys.length >= MAX_KEYS ? (
+                  "Limite de 3 chaves atingido"
+                ) : (
+                  <>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                      <line x1="12" y1="5" x2="12" y2="19"></line>
+                      <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                    Adicionar chave (máx. 3)
+                  </>
+                )}
+              </button>
+
+              {apiKeys.some(k => k.value.trim() !== "") && (
+                <button className="clear-keys-btn" onClick={clearAllKeys} type="button">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                    <path d="M3 6h18"></path>
+                    <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+                    <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
                   </svg>
-                  Adicionar outra chave (máx. 3)
-                </>
+                  Limpar Salvas
+                </button>
               )}
-            </button>
+            </div>
 
             <button
               className={`generate-btn ${isLoading ? "loading" : ""}`}
@@ -1019,12 +1199,23 @@ export default function Page() {
                   <code>{generatedScript}</code>
                 </div>
                 <div className="button-group">
-                  <button id="copyBtn" className="action-btn" onClick={handleCopy}>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                    </svg>
-                    Copiar Script
+                  <button className="action-btn" onClick={handleCopy}>
+                    {isCopied ? (
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <polyline points="20 6 9 17 4 12"></polyline>
+                        </svg>
+                        Copiado!
+                      </>
+                    ) : (
+                      <>
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                        </svg>
+                        Copiar Script
+                      </>
+                    )}
                   </button>
                   <button className="action-btn secondary" onClick={handleDownload}>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
